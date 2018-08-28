@@ -1147,6 +1147,40 @@ class YTCoveringGrid(YTSelectionContainer3D):
         fid = FITSImageData(self, fields, length_unit=length_unit)
         return fid
 
+    def to_glue(self, fields, unit_system="cgs",
+                label="yt", data_collection=None):
+        """
+        Takes specific *fields* in the container and exports them to
+        Glue (http://www.glueviz.org) for interactive
+        analysis. Optionally add a *label*. If you are already within
+        the Glue environment, you can pass a *data_collection* object,
+        otherwise Glue will be started.
+        """
+        from glue.core import DataCollection, Data
+        from glue.core.coordinates import coordinates_from_wcs
+        try:
+            from glue.app.qt.application import GlueApplication
+        except ImportError:
+            from glue.qt.glue_application import GlueApplication
+        from yt.utilities.on_demand_imports import _astropy
+        w = _astropy.pywcs.WCS(naxis=3)
+        c = 0.5*(self.left_edge + self.right_edge).in_base(unit_system)
+        w.wcs.cunit = [str(c.units)]*3
+        w.wcs.crpix = 0.5*(np.array(self.shape)+1)
+        w.wcs.cdelt = self.dds.in_base(unit_system).d
+        w.wcs.crval = c.d
+        gdata = Data(label=label)
+        gdata.coords = coordinates_from_wcs(w)
+        for component_name in fields:
+            gdata.add_component(self[component_name], component_name)
+
+        if data_collection is None:
+            dc = DataCollection([gdata])
+            app = GlueApplication(dc)
+            app.start()
+        else:
+            data_collection.append(gdata)
+
 
 class YTArbitraryGrid(YTCoveringGrid):
     """A 3D region with arbitrary bounds and dimensions.
