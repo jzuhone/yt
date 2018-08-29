@@ -684,6 +684,8 @@ class YTDataContainer:
             except ImportError:
                 from glue.qt.glue_application import GlueApplication
         gdata = Data(label=label)
+        for ax in "xyz":
+            gdata.add_component(self["index", ax], ax)
         for component_name in fields:
             gdata.add_component(self[component_name], component_name)
 
