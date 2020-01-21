@@ -294,6 +294,9 @@ class FITSImageData:
                         hdu.header[key] = float(value.value)
                         hdu.header.comments[key] = f"[{value.units}]"
                 hdu.header["time"] = float(self.current_time.value)
+                if hasattr(self, "redshift"):
+                    hdu.header["HUBBLE"] = self.hubble_constant
+                    hdu.header["REDSHIFT"] = self.redshift
                 self.hdulist.append(hdu)
 
         self.dimensionality = len(self.shape)
@@ -363,6 +366,10 @@ class FITSImageData:
         self.current_time = current_time.to(tunit)
 
     def _set_units(self, ds, base_units):
+        if ds is not None:
+            if getattr(ds, "cosmological_simulation", False):
+                self.hubble_constant = ds.hubble_constant
+                self.redshift = ds.redshift
         attrs = (
             "length_unit",
             "mass_unit",
@@ -400,6 +407,12 @@ class FITSImageData:
             else:
                 uq = None
 
+            if hasattr(self, "hubble_constant"):
+                # Don't store cosmology units
+                atoms = {str(a) for a in uq.units.expr.atoms()}
+                if 'h' in atoms or 'a' in atoms:
+                    uq.convert_to_cgs()
+                
             if uq is not None and uq.units.is_code_unit:
                 mylog.warning(
                     "Cannot use code units of '%s' "
@@ -416,6 +429,9 @@ class FITSImageData:
             setattr(self, attr, uq)
 
     def _set_units_from_header(self, header):
+        if "hubble" in header:
+            self.hubble_constant = header["HUBBLE"]
+            self.redshift = header["REDSHIFT"]
         for unit in ["length", "time", "mass", "velocity", "magnetic"]:
             if unit == "magnetic":
                 key = "BFUNIT"
@@ -423,8 +439,9 @@ class FITSImageData:
                 key = unit[0].upper() + "UNIT"
             if key not in header:
                 continue
-            u = YTQuantity(header[key], header.comments[key].strip("[]"))
-            setattr(self, unit + "_unit", u)
+            u = header.comments[key].strip("[]")
+            uq = YTQuantity(header[key], u)
+            setattr(self, unit + "_unit", uq)
 
     def set_wcs(self, wcs, wcsname=None, suffix=None):
         """
@@ -697,7 +714,9 @@ class FITSImageData:
         im = self.hdulist.pop(idx)
         self.field_units.pop(key)
         self.fields.remove(key)
-        return FITSImageData(_astropy.pyfits.PrimaryHDU(im.data, header=im.header))
+        f = _astropy.pyfits.PrimaryHDU(im.data, header=im.header)
+        return FITSImageData(f, current_time=f[0].header["TIME"],
+                             unit_header=f[0].header)
 
     def close(self):
         self.hdulist.close()
