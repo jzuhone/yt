@@ -34,8 +34,7 @@ class GizmoFieldInfo(GadgetFieldInfo):
         ("Metallicity_09", ("", ["Ca_metallicity"], None)),
         ("Metallicity_10", ("", ["Fe_metallicity"], None)),
         ("ArtificialViscosity", ("", [], None)),
-        ("MagneticField", ("code_magnetic", ["particle_magnetic_field"], None)),
-        ("DivergenceOfMagneticField", ("code_magnetic / code_length", [], None)),
+        ("DivergenceOfMagneticField", ("code_magnetic / code_length", ["magnetic_field_divergence"], None)),
         ("StellarFormationTime", ("", [], None)),
         # "StellarFormationTime" has different meanings in (non-)cosmological
         # runs, so units are left blank here.
@@ -139,10 +138,6 @@ class GizmoFieldInfo(GadgetFieldInfo):
             units=self.ds.unit_system["density"],
         )
         self.alias(("gas", "metal_density"), (ptype, "metal_density"))
-
-        magnetic_field = "MagneticField"
-        if (ptype, magnetic_field) in self.field_list:
-            setup_magnetic_field_aliases(self, ptype, magnetic_field)
 
     def setup_star_particle_fields(self, ptype):
         def _creation_time(field, data):
