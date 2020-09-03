@@ -24,6 +24,7 @@ class SPHFieldInfo(FieldInfoContainer):
         ("StarFormationRate", ("Msun / yr", [], None)),
         ("FormationTime", ("code_time", ["creation_time"], None)),
         ("Metallicity_00", ("", ["metallicity"], None)),
+        ("MagneticField", ("code_magnetic", ["particle_magnetic_field"], None)),
     )
 
     def setup_particle_fields(self, ptype, *args, **kwargs):

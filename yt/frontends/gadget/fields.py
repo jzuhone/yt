@@ -1,7 +1,7 @@
 from yt.frontends.sph.fields import SPHFieldInfo
 from yt.utilities.physical_constants import kb, mp
 from yt.utilities.physical_ratios import _primordial_mass_fraction
-
+from yt.fields.magnetic_field import setup_magnetic_field_aliases
 
 class GadgetFieldInfo(SPHFieldInfo):
     def __init__(self, ds, field_list, slice_info=None):
@@ -95,3 +95,7 @@ class GadgetFieldInfo(SPHFieldInfo):
         # in the FieldInfoContainer base class has already happened at this
         # point
         self.alias(("gas", "temperature"), (ptype, "Temperature"))
+
+        magnetic_field = "MagneticField"
+        if (ptype, magnetic_field) in self.field_list:
+            setup_magnetic_field_aliases(self, ptype, magnetic_field)
