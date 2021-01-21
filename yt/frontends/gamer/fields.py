@@ -1,5 +1,5 @@
 from yt.fields.field_info_container import FieldInfoContainer
-from yt.utilities.physical_constants import kb, mh
+from yt.utilities.physical_constants import kb, mh, clight
 
 b_units = "code_magnetic"
 pre_units = "code_mass / (code_length*code_time**2)"
@@ -15,7 +15,6 @@ psi_units = "code_mass**(1/2) / code_length**(3/2)"
 class GAMERFieldInfo(FieldInfoContainer):
     known_other_fields = (
         # hydro fields on disk (GAMER outputs conservative variables)
-        ("Dens", (rho_units, ["density"], r"\rho")),
         ("MomX", (mom_units, ["momentum_x"], None)),
         ("MomY", (mom_units, ["momentum_y"], None)),
         ("MomZ", (mom_units, ["momentum_z"], None)),
@@ -53,76 +52,200 @@ class GAMERFieldInfo(FieldInfoContainer):
 
         unit_system = self.ds.unit_system
 
-        # velocity
-        def velocity_xyz(v):
-            def _velocity(field, data):
-                return data["gas", f"momentum_{v}"] / data["gas", "density"]
+        if self.ds.special_relativity:
 
-            return _velocity
+            c2 = clight*clight
 
-        for v in "xyz":
+            if self.ds.tm_eos:
+
+                # specific enthalpy
+                def _specific_enthalpy(field, data):
+                    kT = data["gamer", "Temp"]
+                    h = 2.5*kT+np.sqrt(2.25*kT**2+1.0)
+                    return h*c2
+
+                # adiabatic (effective) gamma
+                def _gamma(field, data):
+                    y = data["gas","specific_enthalpy"]/(clight*clight)-1.0
+                    x = data["gamer","Temp"]
+                    return y/(y-x)
+
+            else:
+
+                # adiabatic gamma
+                def _gamma(field, data):
+                    return self.ds.gamma.data["gas","ones"]
+
+                # specific enthalpy
+                def _specific_enthalpy(field, data):
+                    kT = data["gamer", "Temp"]
+                    g = data["gas", "gamma"]
+                    h = 1.0+g*kT/(g-1.0)
+                    return h*c2
+
             self.add_field(
-                ("gas", f"velocity_{v}"),
+                ("gas", "specific_enthalpy"),
                 sampling_type="cell",
-                function=velocity_xyz(v),
-                units=unit_system["velocity"],
+                function=_specific_enthalpy,
+                units=unit_system["specific_energy"],
             )
 
-        # ============================================================================
-        # note that yt internal fields assume
-        #    [thermal_energy]          = [energy per mass]
-        #    [kinetic_energy]          = [energy per volume]
-        #    [magnetic_energy]         = [energy per volume]
-        # and we further adopt
-        #    [total_energy]            = [energy per mass]
-        #    [total_energy_per_volume] = [energy per volume]
-        # ============================================================================
+            self.add_field(
+                ("gas", "gamma"),
+                sampling_type="cell",
+                function=_gamma,
+                units=""
+            )
 
-        # kinetic energy per volume
-        def ek(data):
-            return (
-                0.5
-                * (
-                    data["gamer", "MomX"] ** 2
-                    + data["gamer", "MomY"] ** 2
-                    + data["gamer", "MomZ"] ** 2
+            def four_velocity_xyz(v):
+                def _four_velocity(field, data):
+                    u = data["gas", f"momentum_{v}"]*2
+                    u /= data["gamer", "Dens"]*(c2+data["gas", "specific_enthalpy"])
+                    return u
+                return _four_velocity
+
+            # 4-velocity spatial components
+            for u in "xyz":
+                self.add_field(
+                    ("gas", f"four_velocity_{u}"),
+                    sampling_type="cell",
+                    function=four_velocity_xyz(u),
+                    units=unit_system["velocity"],
                 )
-                / data["gamer", "Dens"]
+
+            # lorentz factor
+            def _lorentz_factor(field, data):
+                u2 = (data["gas", "four_velocity_x"]**2 +
+                      data["gas", "four_velocity_y"]**2 +
+                      data["gas", "four_velocity_z"]**2)/c2
+                return np.sqrt(1.0+u2)
+
+            self.add_field(
+                ("gas", "lorentz_factor"),
+                sampling_type="cell",
+                function=_lorentz_factor,
+                units=""
             )
 
-        # thermal energy per volume
-        def et(data):
-            Et = data["gamer", "Engy"] - ek(data)
-            if self.ds.mhd:
-                # magnetic_energy is a yt internal field
-                Et -= data["gas", "magnetic_energy"]
-            return Et
+            # 4-velocity t-component
 
-        # thermal energy per mass (i.e., specific)
-        def _thermal_energy(field, data):
-            return et(data) / data["gamer", "Dens"]
+            def _four_velocity_t(field, data):
+                return data["gas", "lorentz_factor"]*clight
 
-        self.add_field(
-            ("gas", "thermal_energy"),
-            sampling_type="cell",
-            function=_thermal_energy,
-            units=unit_system["specific_energy"],
-        )
+            self.add_field(
+                ("gas", "four_velocity_t"),
+                sampling_type="cell",
+                function=_four_velocity_t,
+                units=""
+            )
 
-        # total energy per mass
-        def _total_energy(field, data):
-            return data["gamer", "Engy"] / data["gamer", "Dens"]
+            # velocity
+            def velocity_xyz(v):
+                def _velocity(field, data):
+                    return data["gas", f"four_velocity_{v}"] / data["gas", "lorentz_factor"]
+                return _velocity
 
-        self.add_field(
-            ("gas", "total_energy"),
-            sampling_type="cell",
-            function=_total_energy,
-            units=unit_system["specific_energy"],
-        )
+            for v in "xyz":
+                self.add_field(
+                    ("gas", f"velocity_{v}"),
+                    sampling_type="cell",
+                    function=velocity_xyz(v),
+                    units=unit_system["velocity"],
+                )
 
-        # pressure
-        def _pressure(field, data):
-            return et(data) * (data.ds.gamma - 1.0)
+            # density
+            def _density(field, data):
+                return data["gamer", "Dens"] / data["gas", "lorentz_factor"]
+
+            self.add_field(
+                ("gas", "density"),
+                sampling_type="cell",
+                function=_density,
+                units=unit_system["density"]
+            )
+
+            # pressure
+            def _pressure(field, data):
+                return data["gas", "density"]*c2*data["gamer", "Temp"]
+
+        else:
+
+            # density
+            self.alias(
+                ("gas", "density"),
+                ("gamer", "Dens"),
+                units=unit_system["density"],
+            )
+
+            # velocity
+            def velocity_xyz(v):
+                def _velocity(field, data):
+                    return data["gas", f"momentum_{v}"] / data["gas", "density"]
+                return _velocity
+
+            for v in "xyz":
+                self.add_field(
+                    ("gas", f"velocity_{v}"),
+                    sampling_type="cell",
+                    function=velocity_xyz(v),
+                    units=unit_system["velocity"],
+                )
+
+            # ============================================================================
+            # note that yt internal fields assume
+            #    [thermal_energy]          = [energy per mass]
+            #    [kinetic_energy]          = [energy per volume]
+            #    [magnetic_energy]         = [energy per volume]
+            # and we further adopt
+            #    [total_energy]            = [energy per mass]
+            #    [total_energy_per_volume] = [energy per volume]
+            # ============================================================================
+
+            # kinetic energy per volume
+            def ek(data):
+                return (
+                    0.5
+                    * (
+                        data["gamer", "MomX"] ** 2
+                        + data["gamer", "MomY"] ** 2
+                        + data["gamer", "MomZ"] ** 2
+                    )
+                    / data["gamer", "Dens"]
+                )
+
+            # thermal energy per volume
+            def et(data):
+                Et = data["gamer", "Engy"] - ek(data)
+                if self.ds.mhd:
+                    # magnetic_energy is a yt internal field
+                    Et -= data["gas", "magnetic_energy"]
+                return Et
+
+            # thermal energy per mass (i.e., specific)
+            def _thermal_energy(field, data):
+                return et(data) / data["gamer", "Dens"]
+
+            self.add_field(
+                ("gas", "thermal_energy"),
+                sampling_type="cell",
+                function=_thermal_energy,
+                units=unit_system["specific_energy"],
+            )
+
+            # total energy per mass
+            def _total_energy(field, data):
+                return data["gamer", "Engy"] / data["gamer", "Dens"]
+
+            self.add_field(
+                ("gas", "total_energy"),
+                sampling_type="cell",
+                function=_total_energy,
+                units=unit_system["specific_energy"],
+            )
+
+            # pressure
+            def _pressure(field, data):
+                return et(data) * (data.ds.gamma - 1.0)
 
         self.add_field(
             ("gas", "pressure"),
