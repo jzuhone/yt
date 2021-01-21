@@ -1,5 +1,4 @@
 from yt.fields.field_info_container import FieldInfoContainer
-from yt.utilities.physical_constants import kb, mh, clight
 
 b_units = "code_magnetic"
 pre_units = "code_mass / (code_length*code_time**2)"
@@ -48,13 +47,14 @@ class GAMERFieldInfo(FieldInfoContainer):
 
     # add primitive and other derived variables
     def setup_fluid_fields(self):
+        pc = self.ds.units.physical_constants
         from yt.fields.magnetic_field import setup_magnetic_field_aliases
 
         unit_system = self.ds.unit_system
 
         if self.ds.special_relativity:
 
-            c2 = clight*clight
+            c2 = pc.clight*pc.clight
 
             if self.ds.tm_eos:
 
@@ -66,15 +66,15 @@ class GAMERFieldInfo(FieldInfoContainer):
 
                 # adiabatic (effective) gamma
                 def _gamma(field, data):
-                    y = data["gas","specific_enthalpy"]/(clight*clight)-1.0
-                    x = data["gamer","Temp"]
+                    y = data["gas", "specific_enthalpy"]/c2-1.0
+                    x = data["gamer", "Temp"]
                     return y/(y-x)
 
             else:
 
                 # adiabatic gamma
                 def _gamma(field, data):
-                    return self.ds.gamma.data["gas","ones"]
+                    return self.ds.gamma*data["gas", "ones"]
 
                 # specific enthalpy
                 def _specific_enthalpy(field, data):
@@ -97,14 +97,14 @@ class GAMERFieldInfo(FieldInfoContainer):
                 units=""
             )
 
-            def four_velocity_xyz(v):
+            # 4-velocity spatial components
+            def four_velocity_xyz(u):
                 def _four_velocity(field, data):
-                    u = data["gas", f"momentum_{v}"]*2
-                    u /= data["gamer", "Dens"]*(c2+data["gas", "specific_enthalpy"])
-                    return u
+                    ui = data["gas", f"momentum_{u}"]*2
+                    ui /= data["gamer", "Dens"]*(c2+data["gas", "specific_enthalpy"])
+                    return ui
                 return _four_velocity
 
-            # 4-velocity spatial components
             for u in "xyz":
                 self.add_field(
                     ("gas", f"four_velocity_{u}"),
@@ -124,18 +124,6 @@ class GAMERFieldInfo(FieldInfoContainer):
                 ("gas", "lorentz_factor"),
                 sampling_type="cell",
                 function=_lorentz_factor,
-                units=""
-            )
-
-            # 4-velocity t-component
-
-            def _four_velocity_t(field, data):
-                return data["gas", "lorentz_factor"]*clight
-
-            self.add_field(
-                ("gas", "four_velocity_t"),
-                sampling_type="cell",
-                function=_four_velocity_t,
                 units=""
             )
 
@@ -272,8 +260,8 @@ class GAMERFieldInfo(FieldInfoContainer):
             return (
                 data.ds.mu
                 * data["gas", "pressure"]
-                * mh
-                / (data["gas", "density"] * kb)
+                * pc.mh
+                / (data["gas", "density"] * pc.kb)
             )
 
         self.add_field(
