@@ -1,4 +1,5 @@
 from yt.fields.field_info_container import FieldInfoContainer
+import numpy as np
 
 b_units = "code_magnetic"
 pre_units = "code_mass / (code_length*code_time**2)"
@@ -14,6 +15,7 @@ psi_units = "code_mass**(1/2) / code_length**(3/2)"
 class GAMERFieldInfo(FieldInfoContainer):
     known_other_fields = (
         # hydro fields on disk (GAMER outputs conservative variables)
+        ("Dens", (rho_units, [], None)),
         ("MomX", (mom_units, ["momentum_x"], None)),
         ("MomY", (mom_units, ["momentum_y"], None)),
         ("MomZ", (mom_units, ["momentum_z"], None)),
@@ -52,11 +54,11 @@ class GAMERFieldInfo(FieldInfoContainer):
 
         unit_system = self.ds.unit_system
 
-        if self.ds.special_relativity:
+        if self.ds.srhd:
 
             c2 = pc.clight*pc.clight
 
-            if self.ds.tm_eos:
+            if self.ds.eos == 4:
 
                 # specific enthalpy
                 def _specific_enthalpy(field, data):
@@ -83,6 +85,13 @@ class GAMERFieldInfo(FieldInfoContainer):
                     h = 1.0+g*kT/(g-1.0)
                     return h*c2
 
+            # coordinate frame density
+            self.alias(
+                ("gas", "frame_density"),
+                ("gamer", "Dens"),
+                units=unit_system["density"],
+            )
+
             self.add_field(
                 ("gas", "specific_enthalpy"),
                 sampling_type="cell",
@@ -100,8 +109,8 @@ class GAMERFieldInfo(FieldInfoContainer):
             # 4-velocity spatial components
             def four_velocity_xyz(u):
                 def _four_velocity(field, data):
-                    ui = data["gas", f"momentum_{u}"]*2
-                    ui /= data["gamer", "Dens"]*(c2+data["gas", "specific_enthalpy"])
+                    ui = data["gas", f"momentum_{u}"]*c2
+                    ui /= data["gas", "frame_density"]*data["gas", "specific_enthalpy"]
                     return ui
                 return _four_velocity
 
@@ -143,7 +152,7 @@ class GAMERFieldInfo(FieldInfoContainer):
 
             # density
             def _density(field, data):
-                return data["gamer", "Dens"] / data["gas", "lorentz_factor"]
+                return data["gas", "frame_density"] / data["gas", "lorentz_factor"]
 
             self.add_field(
                 ("gas", "density"),
