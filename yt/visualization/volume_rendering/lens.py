@@ -3,6 +3,8 @@ import numpy as np
 from yt.data_objects.image_array import ImageArray
 from yt.units.yt_array import uhstack, unorm, uvstack  # type: ignore
 from yt.utilities.lib.grid_traversal import arr_fisheye_vectors
+from yt.utilities.on_demand_imports import _astropy
+from yt.utilities.on_demand_imports import _astropy_healpix
 from yt.utilities.math_utils import get_rotation_matrix
 from yt.utilities.parallel_tools.parallel_analysis_interface import (
     ParallelAnalysisInterface,
@@ -848,6 +850,90 @@ class StereoSphericalLens(Lens):
         self.viewpoint = camera.position
 
 
+class HEALPixLens(Lens):
+    r"""A lens for HEALPix all-sky map.
+    This lens type accepts a nside property, which controls the resolution
+    of pixellization. HEALPix maps are typically used for all-sky projections.
+    The images returned by this camera will be a flat pixel array ordered by
+    HEALPix indices in ring order.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.nside = 1
+        self.radius = 1.0
+        # innder_radius is the radius of the inner clipping plane, in units of
+        # dx (to be defined in self._get_sampler_params) at the point at which
+        # the volume rendering is centered. This avoids unphysical effects of
+        # nearby cells.
+        self.inner_radius = 10
+
+    @property
+    def hp(self):
+        return _astropy_healpix.HEALPix(self.nside)
+
+    def setup_box_properties(self, camera):
+        """Set up the view and stage based on the properties of the camera."""
+        self.radius = camera.width.max()
+        super().setup_box_properties(camera)
+        self.set_viewpoint(camera)
+
+    def new_image(self, camera):
+        """Initialize a new ImageArray to be used with this lens."""
+        self.current_image = ImageArray(
+            np.zeros((self.hp.npix, 1, 4), dtype='float64'),
+            info={'imtype': 'rendering'})
+        return self.current_image
+
+    def _get_sampler_params(self, camera, render_source):
+        hp = self.hp
+
+        # Set camera resolution according to self.nside (through self.hp)
+        camera.resolution = (hp.npix, 1)
+
+        positions = np.ones((hp.npix, 1, 3), dtype='float64') * camera.position
+
+        # Compute unit vectors in directions of HEALPix pixels.
+        lon, lat = hp.healpix_to_lonlat(range(hp.npix))
+        s2c = _astropy.coordinates.spherical_to_cartesian
+        x, y, z = s2c(np.ones(hp.npix), lat, lon)
+        vectors = np.stack([x, y, z], axis=-1).value.reshape((hp.npix, 1, 3))
+
+        # Trnasform to the camera basis.
+        uy, uz, ux = camera.unit_vectors
+        vectors = vectors.dot([ux, uy, uz])
+
+        # Set the inner clipping plane.
+        grids = camera.data_source.ds.index._find_points(*camera.position)[0]
+        dx = min(g.dds.min() for g in grids)
+        positions += self.inner_radius * dx * vectors
+        vectors *= self.radius
+
+        dummy = np.ones(3, dtype='float64')
+
+        if render_source.zbuffer is not None:
+            image = render_source.zbuffer.rgba
+        else:
+            image = self.new_image(camera)
+
+        sampler_params = dict(
+            vp_pos=positions,
+            vp_dir=vectors,
+            center=self.back_center,
+            bounds=(0.0, 1.0, 0.0, 1.0),
+            x_vec=dummy,
+            y_vec=dummy,
+            width=np.zeros(3, dtype='float64'),
+            image=image,
+            lens_type='healpix')
+
+        return sampler_params
+
+    def set_viewpoint(self, camera):
+        """For a HEALPixLens, the viewpoint is the camera's position"""
+        self.viewpoint = camera.position
+
+
 lenses = {
     "plane-parallel": PlaneParallelLens,
     "perspective": PerspectiveLens,
@@ -855,4 +941,5 @@ lenses = {
     "fisheye": FisheyeLens,
     "spherical": SphericalLens,
     "stereo-spherical": StereoSphericalLens,
+    "healpix": HEALPixLens
 }
