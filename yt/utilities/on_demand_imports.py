@@ -179,6 +179,19 @@ class astropy_imports:
             self._wcsaxes = wcsaxes
         return self._wcsaxes
 
+    _coordinates = None
+
+    @property
+    def coordinates(self):
+        if self._coordinates is None:
+            try:
+                import astropy.coordinates as coordinates
+                self.log
+            except ImportError:
+                coordinates = NotAModule(self._name)
+            self._coordinates = coordinates
+        return self._coordinates
+
     _version = None
 
     @property
@@ -195,6 +208,38 @@ class astropy_imports:
 
 
 _astropy = astropy_imports()
+
+
+class astropy_healpix_imports:
+    _name = "astropy_healpix"
+    _HEALPix = None
+
+    @property
+    def HEALPix(self):
+        if self._HEALPix is None:
+            try:
+                from astropy_healpix import HEALPix
+            except ImportError:
+                HEALPix = NotAModule(self._name)
+            self._HEALPix = HEALPix
+        return self._HEALPix
+
+    _version = None
+
+    @property
+    def __version__(self):
+        if self._version is None:
+            try:
+                import astropy_healpix
+
+                version = astropy_healpix.__version__
+            except ImportError:
+                version = NotAModule(self._name)
+            self._version = version
+        return self._version
+
+
+_astropy_healpix = astropy_healpix_imports()
 
 
 class cartopy_imports:
