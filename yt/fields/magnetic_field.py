@@ -361,7 +361,7 @@ def setup_magnetic_field_aliases(registry, ds_ftype, ds_fields, ftype="gas"):
 
 
 @register_field_plugin
-def setup_electric_field_fields(registry, ftype="gas", slice_info=None):
+def setup_mhd_electric_field_fields(registry, ftype="gas", slice_info=None):
     ds = registry.ds
 
     unit_system = ds.unit_system
@@ -373,10 +373,36 @@ def setup_electric_field_fields(registry, ftype="gas", slice_info=None):
 
     u = registry[ftype, f"magnetic_field_{axis_names[0]}"].units
 
+    def v_factors(dims):
+        if dims == dimensions.magnetic_field_cgs:
+            return 1.0 / ds.units.physical_constants.clight
+        elif dims == dimensions.magnetic_field_mks:
+            return 1.0
+
+    def _electric_field_1(field, data):
+        ret = (
+            data[ftype, f"velocity_{axis_names[1]}"]
+            * data[ftype, f"magentic_field_{axis_names[2]}"]
+        )
+        ret -= (
+            data[ftype, f"velocity_{axis_names[2]}"]
+            * data[ftype, f"magentic_field_{axis_names[1]}"]
+        )
+        return -ret * v_factors(
+            data[ftype, f"magentic_field_{axis_names[1]}"].units.dimensions
+        )
+
+    registry.add_field(
+        (ftype, "magnetic_field_strength"),
+        sampling_type="local",
+        function=_electric_field_1,
+        units=u,
+    )
+
     def elec_factors(dims):
         if dims == dimensions.electric_field_cgs:
             return getattr(ds, "_magnetic_factor", 4.0 * np.pi)
-        elif dims == dimensions.magnetic_field_mks:
+        elif dims == dimensions.electric_field_mks:
             return 1.0 / ds.units.physical_constants.eps_0
 
     def _electric_field_strength(field, data):
