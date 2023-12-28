@@ -242,6 +242,7 @@ class GadgetDataset(SPHDataset):
         w_0=-1.0,
         w_a=0.0,
         default_species_fields=None,
+        alt_vector_fields=None,
     ):
         if self._instantiated:
             return
@@ -302,6 +303,9 @@ class GadgetDataset(SPHDataset):
                 "units_override is not supported for GadgetDataset. "
                 + "Use unit_base instead."
             )
+        if not alt_vector_fields:
+            alt_vector_fields = {}
+        self.alt_vector_fields = alt_vector_fields
 
         # Set dark energy parameters before cosmology object is created
         self.use_dark_factor = use_dark_factor
@@ -428,6 +432,13 @@ class GadgetDataset(SPHDataset):
             self.filename_template = self.parameter_filename
 
         self.file_count = hvals["NumFiles"]
+        self._check_alt_vector_fields()
+
+    def _check_alt_vector_fields(self):
+        for key, field in self.alt_vector_fields.items():
+            field_attr = f"_particle_{key}_name"
+            if hasattr(self, field_attr):
+                setattr(self, field_attr, field)
 
     def _set_code_unit_attributes(self):
         # If no units passed in by user, set a sane default (Gadget-2 users
