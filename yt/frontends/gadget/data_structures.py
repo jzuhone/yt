@@ -591,6 +591,7 @@ class GadgetHDF5Dataset(GadgetDataset):
         units_override=None,
         unit_system="cgs",
         default_species_fields=None,
+        alt_vector_fields=None,
     ):
         self.storage_filename = None
         filename = os.path.abspath(filename)
@@ -609,6 +610,7 @@ class GadgetHDF5Dataset(GadgetDataset):
             bounding_box=bounding_box,
             unit_system=unit_system,
             default_species_fields=default_species_fields,
+            alt_vector_fields=alt_vector_fields,
         )
 
     def _get_hvals(self):
