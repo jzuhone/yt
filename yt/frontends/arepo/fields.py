@@ -15,7 +15,6 @@ class ArepoFieldInfo(GadgetFieldInfo):
             GFM_SFT_units = "code_length/code_velocity"
         self.known_particle_fields += (
             ("GFM_StellarFormationTime", (GFM_SFT_units, ["stellar_age"], None)),
-            ("MagneticField", ("code_magnetic", ["particle_magnetic_field"], None)),
             (
                 "MagneticFieldDivergence",
                 ("code_magnetic/code_length", ["magnetic_field_divergence"], None),
@@ -89,8 +88,9 @@ class ArepoFieldInfo(GadgetFieldInfo):
             self.nuclei_names = metal_elements
             self.species_names = ["H"] + metal_elements
 
-        if (ptype, "MagneticField") in self.field_list:
-            setup_magnetic_field_aliases(self, ptype, "MagneticField")
+        magnetic_field = self.ds._particle_magnetic_name
+        if (ptype, magnetic_field) in self.field_list:
+            setup_magnetic_field_aliases(self, ptype, magnetic_field)
 
         if (ptype, "NeutralHydrogenAbundance") in self.field_list:
 

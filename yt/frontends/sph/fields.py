@@ -41,6 +41,10 @@ class SPHFieldInfo(FieldInfoContainer):
                 self.ds._particle_velocity_name,
                 ("code_velocity", ["particle_velocity"], None),
             ),
+            (
+                self.ds._particle_magnetic_name,
+                ("code_magnetic", ["particle_magnetic_field"], None),
+            ),
         )
         self.known_particle_fields += vfields
 
