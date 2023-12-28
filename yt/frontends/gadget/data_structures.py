@@ -215,6 +215,7 @@ class GadgetDataset(SPHDataset):
     _particle_mass_name = "Mass"
     _particle_coordinates_name = "Coordinates"
     _particle_velocity_name = "Velocities"
+    _particle_magnetic_name = "MagneticField"
     _sph_ptypes = ("Gas",)
     _suffix = ""
 
