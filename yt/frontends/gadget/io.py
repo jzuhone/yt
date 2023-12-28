@@ -34,7 +34,9 @@ class IOHandlerGadgetHDF5(IOHandlerSPH):
         "Iron",
     )
 
-    _coord_name = "Coordinates"
+    def __init__(self, ds):
+        super().__init__(ds)
+        self._coord_name = self.ds._particle_coordinates_name
 
     @cached_property
     def var_mass(self) -> tuple[str, ...]:
@@ -75,11 +77,11 @@ class IOHandlerGadgetHDF5(IOHandlerSPH):
         for key in f.keys():
             if not key.startswith("PartType"):
                 continue
-            if "Coordinates" not in f[key]:
+            if self._coord_name not in f[key]:
                 continue
             if needed_ptype and key != needed_ptype:
                 continue
-            ds = f[key]["Coordinates"][si:ei, ...]
+            ds = f[key][self._coord_name][si:ei, ...]
             dt = ds.dtype.newbyteorder("N")  # Native
             pos = np.empty(ds.shape, dtype=dt)
             pos[:] = ds
@@ -174,10 +176,10 @@ class IOHandlerGadgetHDF5(IOHandlerSPH):
                 mask_sum = data_file.total_particles[ptype]
                 hsmls = None
             else:
-                coords = g["Coordinates"][si:ei].astype("float64")
+                coords = g[self._coord_name][si:ei].astype("float64")
                 if ptype == "PartType0":
                     hsmls = self._get_smoothing_length(
-                        data_file, g["Coordinates"].dtype, g["Coordinates"].shape
+                        data_file, g[self._coord_name].dtype, g[self._coord_name].shape
                     ).astype("float64")
                 else:
                     hsmls = 0.0
@@ -223,8 +225,8 @@ class IOHandlerGadgetHDF5(IOHandlerSPH):
                     if hsmls is None:
                         hsmls = self._get_smoothing_length(
                             data_file,
-                            g["Coordinates"].dtype,
-                            g["Coordinates"].shape,
+                            g[self._coord_name].dtype,
+                            g[self._coord_name].shape,
                         ).astype("float64")
                     data = hsmls[mask]
                 else:
