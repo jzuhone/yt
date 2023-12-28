@@ -44,8 +44,10 @@ class SPHFieldInfo(FieldInfoContainer):
         )
         if self.ds._particle_magnetic_name is not None:
             vfields += (
-                self.ds._particle_magnetic_name,
-                ("code_magnetic", ["particle_magnetic_field"], None),
+                (
+                    self.ds._particle_magnetic_name,
+                    ("code_magnetic", ["particle_magnetic_field"], None),
+                ),
             )
         self.known_particle_fields += vfields
 
