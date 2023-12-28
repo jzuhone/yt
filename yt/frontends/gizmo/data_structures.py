@@ -13,6 +13,7 @@ from .fields import GizmoFieldInfo
 class GizmoDataset(GadgetHDF5Dataset):
     _load_requirements = ["h5py"]
     _field_info_class = GizmoFieldInfo
+    _particle_magnetic_name = "MagneticField"
 
     @classmethod
     def _is_valid(cls, filename: str, *args, **kwargs) -> bool:

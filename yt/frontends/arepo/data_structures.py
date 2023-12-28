@@ -10,6 +10,7 @@ from .fields import ArepoFieldInfo
 class ArepoHDF5Dataset(GadgetHDF5Dataset):
     _load_requirements = ["h5py"]
     _field_info_class = ArepoFieldInfo
+    _particle_magnetic_name = "MagneticField"
 
     def __init__(
         self,
