@@ -7,9 +7,6 @@ class SPHFieldInfo(FieldInfoContainer):
     known_particle_fields: KnownFieldsT = (
         ("Mass", ("code_mass", ["particle_mass"], None)),
         ("Masses", ("code_mass", ["particle_mass"], None)),
-        ("Coordinates", ("code_length", ["particle_position"], None)),
-        ("Velocity", ("code_velocity", ["particle_velocity"], None)),
-        ("Velocities", ("code_velocity", ["particle_velocity"], None)),
         ("ParticleIDs", ("", ["particle_index"], None)),
         ("InternalEnergy", ("code_specific_energy", ["specific_thermal_energy"], None)),
         ("SmoothingLength", ("code_length", ["smoothing_length"], None)),
@@ -32,6 +29,20 @@ class SPHFieldInfo(FieldInfoContainer):
         ("CloudFraction", ("", ["cold_fraction"], None)),
         ("HotPhaseTemperature", ("code_temperature", ["hot_temperature"], None)),
     )
+
+    def __init__(self, ds, field_list, slice_info=None):
+        super().__init__(ds, field_list, slice_info=slice_info)
+        vfields = (
+            (
+                self.ds._particle_coordinates_name,
+                ("code_length", ["particle_position"], None),
+            ),
+            (
+                self.ds._particle_velocity_name,
+                ("code_velocity", ["particle_velocity"], None),
+            ),
+        )
+        self.known_particle_fields += vfields
 
     def setup_particle_fields(self, ptype, *args, **kwargs):
         super().setup_particle_fields(ptype, *args, **kwargs)
