@@ -11,8 +11,6 @@ class GizmoFieldInfo(GadgetFieldInfo):
     # The known fields list is according to the GIZMO User Guide. See
     # http://www.tapir.caltech.edu/~phopkins/Site/GIZMO_files/gizmo_documentation.html#snaps-reading
     known_particle_fields: KnownFieldsT = (
-        ("Coordinates", ("code_length", ["particle_position"], None)),
-        ("Velocities", ("code_velocity", ["particle_velocity"], None)),
         ("ParticleIDs", ("", ["particle_index"], None)),
         ("Masses", ("code_mass", ["particle_mass"], None)),
         ("InternalEnergy", ("code_specific_energy", ["specific_thermal_energy"], None)),
