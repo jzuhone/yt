@@ -3,10 +3,10 @@ import sys
 import numpy as np
 
 from yt._typing import FieldType
-from yt.fields.field_info_container import FieldInfoContainer
-from yt.geometry.api import Geometry
 from yt.fields.derived_field import ValidateParameter, ValidateSpatial
+from yt.fields.field_info_container import FieldInfoContainer
 from yt.funcs import just_one
+from yt.geometry.api import Geometry
 from yt.units import dimensions
 
 from .field_plugin_registry import register_field_plugin
