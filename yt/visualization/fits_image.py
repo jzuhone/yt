@@ -1033,6 +1033,9 @@ class FITSSlice(FITSImageData):
         center coordinates will be the same as the center of the image as
         defined by the *center* keyword argument. If "image", then the center
         coordinates will be set to (0,0). Default: "domain"
+    field_parameters : dictionary
+        A dictionary of field parameters than can be accessed by derived
+        fields.
     """
 
     def __init__(
@@ -1046,12 +1049,15 @@ class FITSSlice(FITSImageData):
         length_unit=None,
         *,
         origin="domain",
+        field_parameters=None,
         **kwargs,
     ):
+        if field_parameters is None:
+            field_parameters = {}
         fields = list(iter_fields(fields))
         axis = fix_axis(axis, ds)
         center, dcenter = ds.coordinates.sanitize_center(center, axis)
-        slc = ds.slice(axis, center[axis], **kwargs)
+        slc = ds.slice(axis, center[axis], field_parameters=field_parameters, **kwargs)
         w, frb, lunit = construct_image(
             ds,
             axis,
@@ -1135,6 +1141,9 @@ class FITSProjection(FITSImageData):
         for a weighted projection, moment = 1 (the default) corresponds to a
         weighted average. moment = 2 corresponds to a weighted standard
         deviation.
+    field_parameters : dictionary
+        A dictionary of field parameters than can be accessed by derived
+        fields.
     """
 
     def __init__(
@@ -1150,13 +1159,21 @@ class FITSProjection(FITSImageData):
         *,
         origin="domain",
         moment=1,
+        field_parameters=None,
         **kwargs,
     ):
+        if field_parameters is None:
+            field_parameters = {}
         fields = list(iter_fields(fields))
         axis = fix_axis(axis, ds)
         center, dcenter = ds.coordinates.sanitize_center(center, axis)
         prj = ds.proj(
-            fields[0], axis, weight_field=weight_field, moment=moment, **kwargs
+            fields[0],
+            axis,
+            weight_field=weight_field,
+            moment=moment,
+            field_parameters=field_parameters,
+            **kwargs,
         )
         w, frb, lunit = construct_image(
             ds,
@@ -1489,6 +1506,9 @@ class FITSOffAxisSlice(FITSImageData):
     length_unit : string, optional
         the length units that the coordinates are written in. The default
         is to use the default length unit of the dataset.
+    field_parameters : dictionary
+        A dictionary of field parameters than can be accessed by derived
+        fields.
     """
 
     def __init__(
@@ -1501,10 +1521,14 @@ class FITSOffAxisSlice(FITSImageData):
         width=None,
         north_vector=None,
         length_unit=None,
+        *,
+        field_parameters=None,
     ):
         fields = list(iter_fields(fields))
         center, dcenter = ds.coordinates.sanitize_center(center, axis=None)
-        cut = ds.cutting(normal, center, north_vector=north_vector)
+        cut = ds.cutting(
+            normal, center, north_vector=north_vector, field_parameters=field_parameters
+        )
         center = ds.arr([0.0] * 2, "code_length")
         w, frb, lunit = construct_image(
             ds, normal, cut, center, image_res, width, length_unit
@@ -1600,6 +1624,9 @@ class FITSOffAxisProjection(FITSImageData):
         for a weighted projection, moment = 1 (the default) corresponds to a
         weighted average. moment = 2 corresponds to a weighted standard
         deviation.
+    field_parameters : dictionary
+        A dictionary of field parameters than can be accessed by derived
+        fields.
     """
 
     def __init__(
@@ -1618,7 +1645,10 @@ class FITSOffAxisProjection(FITSImageData):
         length_unit=None,
         *,
         moment=1,
+        field_parameters=None,
     ):
+        if field_parameters is None:
+            field_parameters = {}
         validate_moment(moment, weight_field)
         center, dcenter = ds.coordinates.sanitize_center(center, axis=None)
         fields = list(iter_fields(fields))
@@ -1632,6 +1662,8 @@ class FITSOffAxisProjection(FITSImageData):
             source = ds.all_data()
         else:
             source = data_source
+        for key, value in field_parameters.items():
+            source.set_field_parameter(key, value)
         fields = source._determine_fields(list(iter_fields(fields)))
         stddev_str = "_stddev" if moment == 2 else ""
         for item in fields:
