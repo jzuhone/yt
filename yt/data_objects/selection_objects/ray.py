@@ -226,3 +226,161 @@ class YTRay(YTSelectionContainer1D):
         itab = SPHKernelInterpolationTable(self.ds.kernel_name)
         dl = itab.interpolate_array((b / hsml) ** 2) * mass / dens / hsml**2
         return dl / length
+
+
+class YTRayBundle(YTSelectionContainer1D):
+    """
+    A bundle of arbitrarily-aligned rays cast through the dataset.
+
+    Each ray in the bundle is defined by a start point and an end point,
+    exactly like :class:`YTRay`.  The bundle selects the union of all cells
+    intersected by any ray and exposes the extra ``ray_index`` container
+    field to identify which ray (0-based) owns each cell.  When multiple
+    rays pass through the same cell the one with the lowest index is used.
+
+    This object is typically accessed through the ``ray_bundle`` attribute
+    of a dataset index object.
+
+    Parameters
+    ----------
+    start_points : array-like, shape (N, 3)
+        Starting coordinates of each ray.  If plain numbers are given they
+        are assumed to be in *code* units; pass a :class:`~yt.units.yt_array.YTArray`
+        to supply explicit units.
+    end_points : array-like, shape (N, 3)
+        Ending coordinates of each ray, in the same format.
+    ds : ~yt.data_objects.static_output.Dataset, optional
+        Dataset to use.
+    field_parameters : dict, optional
+        Field parameters accessible from derived fields.
+    data_source : optional
+        Restrict selection to a parent data source.
+
+    Examples
+    --------
+
+    >>> import yt
+    >>> import numpy as np
+    >>> ds = yt.load("RedshiftOutput0005")
+    >>> # Three parallel rays along z separated in x
+    >>> starts = ds.arr([[0.2, 0.5, 0.0], [0.4, 0.5, 0.0], [0.6, 0.5, 0.0]], "code_length")
+    >>> ends   = ds.arr([[0.2, 0.5, 1.0], [0.4, 0.5, 1.0], [0.6, 0.5, 1.0]], "code_length")
+    >>> bundle = ds.ray_bundle(starts, ends)
+    >>> print(bundle["gas", "density"])
+    >>> print(bundle["ray_index"])   # which ray owns each cell
+
+    Note: Like :class:`YTRay`, the data are not guaranteed to be spatially
+    ordered.  Sort by the ``t`` field (parametric position along each ray,
+    0 at start → 1 at end) within each ``ray_index`` group if you need
+    spatial order.
+    """
+
+    _type_name = "ray_bundle"
+    _con_args = ("start_points", "end_points")
+    _container_fields = ("t", "dts", "ray_index")
+
+    def __init__(
+        self,
+        start_points,
+        end_points,
+        ds=None,
+        field_parameters=None,
+        data_source=None,
+    ):
+        validate_object(ds, Dataset)
+        validate_object(field_parameters, dict)
+        validate_object(data_source, YTSelectionContainer)
+        super().__init__(ds, field_parameters, data_source)
+
+        start_points = np.asarray(start_points, dtype="float64")
+        end_points = np.asarray(end_points, dtype="float64")
+
+        if start_points.ndim != 2 or start_points.shape[1] != 3:
+            raise TypeError(
+                "start_points must be an array of shape (N, 3), "
+                f"got shape {start_points.shape}"
+            )
+        if end_points.ndim != 2 or end_points.shape[1] != 3:
+            raise TypeError(
+                "end_points must be an array of shape (N, 3), "
+                f"got shape {end_points.shape}"
+            )
+        if start_points.shape[0] != end_points.shape[0]:
+            raise TypeError(
+                "start_points and end_points must have the same number of rows, "
+                f"got {start_points.shape[0]} and {end_points.shape[0]}"
+            )
+
+        # Convert to code_length, preserving any existing unit information.
+        if isinstance(start_points, YTArray):
+            self.start_points = self.ds.arr(start_points).to("code_length")
+        else:
+            self.start_points = self.ds.arr(
+                start_points, "code_length", dtype="float64"
+            )
+        if isinstance(end_points, YTArray):
+            self.end_points = self.ds.arr(end_points).to("code_length")
+        else:
+            self.end_points = self.ds.arr(end_points, "code_length", dtype="float64")
+
+        self.vecs = self.end_points - self.start_points
+
+        # Warn if any ray endpoint lies outside the domain.
+        if (self.start_points < self.ds.domain_left_edge).any() or (
+            self.end_points > self.ds.domain_right_edge
+        ).any():
+            mylog.warning(
+                "One or more ray start/end points are outside the domain. "
+                "Returned data will only cover the portions inside the domain."
+            )
+
+        # Use the centroid of all start/end points as the notional centre.
+        center = 0.5 * (self.start_points.mean(axis=0) + self.end_points.mean(axis=0))
+        self._set_center(center)
+        self.set_field_parameter("center", center)
+
+        self._dts, self._ts = None, None
+
+    # ------------------------------------------------------------------
+    # Container-field generation
+    # ------------------------------------------------------------------
+
+    def _generate_container_field(self, field):
+        if isinstance(self.ds, SPHDataset):
+            raise NotImplementedError("YTRayBundle does not yet support SPH datasets.")
+        return self._generate_container_field_grid(field)
+
+    def _generate_container_field_grid(self, field):
+        if self._current_chunk is None:
+            self.index._identify_base_chunk(self)
+        chunk = self._current_chunk
+        # Compute and cache all three arrays in one pass to avoid repeated
+        # grid walks (which are O(N_rays × grid_cells)).
+        if not hasattr(chunk, "_bundle_tcoords"):
+            self._compute_bundle_coords(chunk)
+        if field == "dts":
+            return chunk._bundle_dtcoords
+        elif field == "t":
+            return chunk._bundle_tcoords
+        elif field == "ray_index":
+            return chunk._bundle_ray_index
+        raise KeyError(field)
+
+    def _compute_bundle_coords(self, chunk):
+        """Walk each object in *chunk* once, collecting t, dts, and ray_index."""
+        dts_list, ts_list, ri_list = [], [], []
+        for obj in chunk._fast_index or chunk.objs:
+            dtr, tr, ri = self.selector.get_dt_with_ray_index(obj)
+            if tr.size == 0:
+                continue
+            dts_list.append(dtr)
+            ts_list.append(tr)
+            ri_list.append(ri)
+        if dts_list:
+            chunk._bundle_dtcoords = np.concatenate(dts_list)
+            chunk._bundle_tcoords = np.concatenate(ts_list)
+            chunk._bundle_ray_index = np.concatenate(ri_list)
+        else:
+            chunk._bundle_dtcoords = np.empty(0, dtype="float64")
+            chunk._bundle_tcoords = np.empty(0, dtype="float64")
+            chunk._bundle_ray_index = np.empty(0, dtype="int64")
