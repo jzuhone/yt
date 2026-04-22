@@ -15,7 +15,7 @@ from yt.funcs import (
     validate_sequence,
 )
 from yt.units import YTArray, YTQuantity
-from yt.units._numpy_wrapper_functions import udot, unorm
+from yt.units._numpy_wrapper_functions import uconcatenate, udot, unorm
 from yt.utilities.lib.pixelization_routines import SPHKernelInterpolationTable
 from yt.utilities.logger import ytLogger as mylog
 
@@ -233,10 +233,11 @@ class YTRayBundle(YTSelectionContainer1D):
     A bundle of arbitrarily-aligned rays cast through the dataset.
 
     Each ray in the bundle is defined by a start point and an end point,
-    exactly like :class:`YTRay`.  The bundle selects the union of all cells
-    intersected by any ray and exposes the extra ``ray_index`` container
-    field to identify which ray (0-based) owns each cell.  When multiple
-    rays pass through the same cell the one with the lowest index is used.
+    exactly like :class:`YTRay`.  Every ray independently selects the cells
+    it passes through, so a cell hit by multiple rays appears in the output
+    **once per ray that crosses it**, each with its own ``t`` and ``dts``
+    values.  The ``ray_index`` field (0-based integer) identifies which ray
+    each data point belongs to.
 
     This object is typically accessed through the ``ray_bundle`` attribute
     of a dataset index object.
@@ -245,8 +246,8 @@ class YTRayBundle(YTSelectionContainer1D):
     ----------
     start_points : array-like, shape (N, 3)
         Starting coordinates of each ray.  If plain numbers are given they
-        are assumed to be in *code* units; pass a :class:`~yt.units.yt_array.YTArray`
-        to supply explicit units.
+        are assumed to be in *code* units; pass a
+        :class:`~yt.units.yt_array.YTArray` to supply explicit units.
     end_points : array-like, shape (N, 3)
         Ending coordinates of each ray, in the same format.
     ds : ~yt.data_objects.static_output.Dataset, optional
@@ -260,19 +261,17 @@ class YTRayBundle(YTSelectionContainer1D):
     --------
 
     >>> import yt
-    >>> import numpy as np
     >>> ds = yt.load("RedshiftOutput0005")
-    >>> # Three parallel rays along z separated in x
+    >>> # Three parallel rays along z, separated in x
     >>> starts = ds.arr([[0.2, 0.5, 0.0], [0.4, 0.5, 0.0], [0.6, 0.5, 0.0]], "code_length")
     >>> ends   = ds.arr([[0.2, 0.5, 1.0], [0.4, 0.5, 1.0], [0.6, 0.5, 1.0]], "code_length")
     >>> bundle = ds.ray_bundle(starts, ends)
     >>> print(bundle["gas", "density"])
-    >>> print(bundle["ray_index"])   # which ray owns each cell
+    >>> print(bundle["ray_index"])   # 0, 0, …, 1, 1, …, 2, 2, …
 
-    Note: Like :class:`YTRay`, the data are not guaranteed to be spatially
-    ordered.  Sort by the ``t`` field (parametric position along each ray,
-    0 at start → 1 at end) within each ``ray_index`` group if you need
-    spatial order.
+    Note: data are not guaranteed to be spatially ordered.  Sort by ``t``
+    (parametric position 0 → 1 along each ray) within each ``ray_index``
+    group to recover spatial order.
     """
 
     _type_name = "ray_bundle"
@@ -339,48 +338,58 @@ class YTRayBundle(YTSelectionContainer1D):
         self._set_center(center)
         self.set_field_parameter("center", center)
 
-        self._dts, self._ts = None, None
+        self._rays_cache = None
 
     # ------------------------------------------------------------------
-    # Container-field generation
+    # Individual-ray access
     # ------------------------------------------------------------------
+
+    @property
+    def _individual_rays(self):
+        """Lazily build one YTRay per (start, end) pair."""
+        if self._rays_cache is None:
+            self._rays_cache = [
+                self.ds.ray(sp, ep)
+                for sp, ep in zip(self.start_points, self.end_points, strict=True)
+            ]
+        return self._rays_cache
+
+    # ------------------------------------------------------------------
+    # Data access
+    #
+    # Each ray is independent: a cell hit by ray 0 *and* ray 1 contributes
+    # two separate data points.  We therefore bypass yt's per-cell mask
+    # machinery entirely and delegate to individual YTRay objects, then
+    # concatenate their results.
+    # ------------------------------------------------------------------
+
+    def __getitem__(self, key):
+        # Container fields handled inline.
+        if key in self._container_fields:
+            if key not in self.field_data:
+                self.field_data[key] = self._generate_container_field(key)
+            return self.field_data[key]
+
+        # All other fields: concatenate across individual rays.
+        f = self._determine_fields(key)
+        fkey = f[0]
+        if fkey not in self.field_data:
+            arrays = [r[key] for r in self._individual_rays]
+            self.field_data[fkey] = (
+                uconcatenate(arrays)
+                if arrays
+                else self.ds.arr(np.zeros(0), "dimensionless")
+            )
+        return self.field_data[fkey]
 
     def _generate_container_field(self, field):
-        if isinstance(self.ds, SPHDataset):
-            raise NotImplementedError("YTRayBundle does not yet support SPH datasets.")
-        return self._generate_container_field_grid(field)
-
-    def _generate_container_field_grid(self, field):
-        if self._current_chunk is None:
-            self.index._identify_base_chunk(self)
-        chunk = self._current_chunk
-        # Compute and cache all three arrays in one pass to avoid repeated
-        # grid walks (which are O(N_rays × grid_cells)).
-        if not hasattr(chunk, "_bundle_tcoords"):
-            self._compute_bundle_coords(chunk)
-        if field == "dts":
-            return chunk._bundle_dtcoords
+        rays = self._individual_rays
+        if field == "ray_index":
+            return np.concatenate(
+                [np.full(len(r["t"]), i, dtype="int64") for i, r in enumerate(rays)]
+            )
         elif field == "t":
-            return chunk._bundle_tcoords
-        elif field == "ray_index":
-            return chunk._bundle_ray_index
+            return uconcatenate([r["t"] for r in rays])
+        elif field == "dts":
+            return uconcatenate([r["dts"] for r in rays])
         raise KeyError(field)
-
-    def _compute_bundle_coords(self, chunk):
-        """Walk each object in *chunk* once, collecting t, dts, and ray_index."""
-        dts_list, ts_list, ri_list = [], [], []
-        for obj in chunk._fast_index or chunk.objs:
-            dtr, tr, ri = self.selector.get_dt_with_ray_index(obj)
-            if tr.size == 0:
-                continue
-            dts_list.append(dtr)
-            ts_list.append(tr)
-            ri_list.append(ri)
-        if dts_list:
-            chunk._bundle_dtcoords = np.concatenate(dts_list)
-            chunk._bundle_tcoords = np.concatenate(ts_list)
-            chunk._bundle_ray_index = np.concatenate(ri_list)
-        else:
-            chunk._bundle_dtcoords = np.empty(0, dtype="float64")
-            chunk._bundle_tcoords = np.empty(0, dtype="float64")
-            chunk._bundle_ray_index = np.empty(0, dtype="int64")
