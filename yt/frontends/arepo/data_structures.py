@@ -1,10 +1,13 @@
+import os
 import numpy as np
 
 from yt.frontends.gadget.api import GadgetHDF5Dataset
 from yt.funcs import mylog
 from yt.utilities.on_demand_imports import _h5py as h5py
+from yt.frontends.sph.data_structures import SPHParticleIndex
 
 from .fields import ArepoFieldInfo
+from ...data_objects.static_output import Dataset
 
 
 class ArepoHDF5Dataset(GadgetHDF5Dataset):
@@ -124,3 +127,64 @@ class ArepoHDF5Dataset(GadgetHDF5Dataset):
             self.magnetic_unit = self.quan(munit.value, f"{munit.units}/a**2")
         else:
             self.magnetic_unit = munit
+
+
+def find_other_zoom_filename(filename):
+    head, tail = os.path.split(filename)
+    loc_file_parts = tail.split(".")
+    first_num = int(loc_file_parts[1])
+    loc_file_parts[1] = str(first_num + 352)
+    return first_num, os.path.join(head, ".".join(loc_file_parts))
+
+
+class TNGClusterZoomIndex(SPHParticleIndex):
+
+    def _setup_filenames(self):
+        cls = self.dataset._file_class
+        _, other_filename = find_other_zoom_filename(self.dataset.filename)
+        self.data_files = []
+        fi = 0
+        for i, fn in enumerate([self.dataset.filename, other_filename]):
+            start = 0
+            if self.chunksize > 0:
+                end = start + self.chunksize
+            else:
+                end = None
+            while True:
+                try:
+                    df = cls(self.dataset, self.io, fn, fi, (start, end))
+                except FileNotFoundError:
+                    mylog.warning(
+                        "Failed to load '%s' (missing file or directory)", _filename
+                    )
+                    break
+                if max(df.total_particles.values()) == 0:
+                    break
+                fi += 1
+                self.data_files.append(df)
+                if end is None:
+                    break
+                start = end
+                end += self.chunksize
+
+
+class TNGClusterZoomDataset(ArepoHDF5Dataset):
+    _index_class = TNGClusterZoomIndex
+
+    @classmethod
+    def _is_valid(cls, filename: str, *args, **kwargs) -> bool:
+        valid = super()._is_valid(filename, *args, **kwargs)
+        if valid:
+            try:
+                _, other_filename = find_other_zoom_filename(filename)
+                valid = super()._is_valid(other_filename, *args, **kwargs)
+            except Exception:
+                valid = False
+        return valid
+
+    def _get_hvals(self):
+        hvals = super()._get_hvals()
+        hvals["NumFiles"] = 2
+        hvals["NumFilesPerSnapshot"] = 2
+        hvals["FirstNum"] = find_other_zoom_filename(self.filename)[0]
+        return hvals

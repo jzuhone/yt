@@ -418,7 +418,7 @@ class GadgetDataset(SPHDataset):
                 f"{prefix}.%(num)s{self._suffix}",
                 f"{prefix}.gad.%(num)s{self._suffix}",
             ):
-                if os.path.isfile(t % {"num": 0}):
+                if os.path.isfile(t % {"num": hvals.get("FirstNum", 0)}):
                     self.filename_template = t
                     break
             else:
