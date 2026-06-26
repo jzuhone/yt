@@ -1090,10 +1090,17 @@ class Dataset(abc.ABC):
     def _add_object_class(self, name, base):
         # skip projection data objects that don't make sense
         # for this type of data
-        if "proj" in name and name != self._proj_type:
-            return
-        elif "proj" in name:
-            name = "proj"
+        if "proj" in name:
+            if "vector" in name:
+                # vector projections build on the scalar projection; the variant
+                # whose name is "<_proj_type>_vector" is exposed as `proj_vector`
+                if name != f"{self._proj_type}_vector":
+                    return
+                name = "proj_vector"
+            elif name != self._proj_type:
+                return
+            else:
+                name = "proj"
         self.object_types.append(name)
         obj = functools.partial(base, ds=weakref.proxy(self))
         obj.__doc__ = base.__doc__
