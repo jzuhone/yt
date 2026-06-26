@@ -262,13 +262,18 @@ class YTProj(YTSelectionContainer2D):
                 )
                 sfields.append((ftype, f"tmp_{fname}_squared"))
         nfields = len(fields)
-        nsfields = len(sfields)
         # We need a new tree for every single set of fields we add
         if nfields == 0:
             return
         if isinstance(self.ds, ParticleDataset):
             return
-        tree = self._get_tree(nfields + nsfields)
+        # Vector-valued fields return a 2D array per cell and thus occupy more
+        # than one column in the projection tree.  ncomp holds the number of
+        # components for each field (1 for ordinary scalar fields), and the tree
+        # is sized to the total number of columns.
+        ncomp = self._determine_field_components(fields + sfields)
+        ncols = int(sum(ncomp))
+        tree = self._get_tree(ncols)
         # This only needs to be done if we are in parallel; otherwise, we can
         # safely build the mesh as we go.
         if communication_system.communicators[-1].size > 1:
@@ -282,7 +287,7 @@ class YTProj(YTSelectionContainer2D):
                 if not _units_initialized:
                     self._initialize_projected_units(fields, chunk)
                     _units_initialized = True
-                self._handle_chunk(chunk, fields + sfields, tree)
+                self._handle_chunk(chunk, fields + sfields, tree, ncomp)
         # if there's less than nprocs chunks, units won't be initialized
         # on all processors, so sync with _projected_units on rank 0
         projected_units = self.comm.mpi_bcast(self._projected_units)
@@ -335,14 +340,21 @@ class YTProj(YTSelectionContainer2D):
         data["pdx"] = self.ds.arr(pdx, code_length)
         data["pdy"] = self.ds.arr(pdy, code_length)
         data["fields"] = nvals
-        # Now we run the finalizer, which is ignored if we don't need it
-        field_data = np.hsplit(data.pop("fields"), nfields + nsfields)
+        # Now we run the finalizer, which is ignored if we don't need it.
+        # Split the columns back out per field, honoring the (possibly >1)
+        # component count of each field.
+        col_bounds = np.cumsum(ncomp)[:-1]
+        field_data = np.split(data.pop("fields"), col_bounds, axis=1)
         for fi, field in enumerate(fields):
             mylog.debug("Setting field %s", field)
             input_units = self._projected_units[field]
-            fvals = field_data[fi].ravel()
+            fvals = field_data[fi]
             if self.moment == 2:
-                fvals = compute_stddev_image(field_data[fi + nfields].ravel(), fvals)
+                fvals = compute_stddev_image(field_data[fi + nfields], fvals)
+            # scalar fields are stored as 1D arrays; vector fields keep their
+            # trailing component axis, i.e. shape (npix, ncomponents)
+            if ncomp[fi] == 1:
+                fvals = fvals.ravel()
             self[field] = self.ds.arr(fvals, input_units)
         for i in list(data.keys()):
             self[i] = data.pop(i)
@@ -415,6 +427,27 @@ class YTProj(YTSelectionContainer2D):
                 self._projected_units[field] = field_unit * path_length_unit
             else:
                 self._projected_units[field] = field_unit
+
+    def _determine_field_components(self, fields):
+        """Number of components for each field.
+
+        Ordinary scalar fields have a single component; vector-valued fields
+        return a 2D array per cell and have as many components as the size of
+        that trailing axis.  The count is read from the first available chunk
+        and synchronized across processors so that every rank builds a tree
+        with the same number of columns.
+        """
+        ncomp = [0] * len(fields)
+        with self.data_source._field_parameter_state(self.field_parameters):
+            for chunk in self.data_source.chunks([], "io", local_only=True):
+                for i, field in enumerate(fields):
+                    arr = chunk[field]
+                    ncomp[i] = 1 if arr.ndim == 1 else arr.shape[1]
+                break
+        # ranks that own no chunks contribute 0; take the max so every rank
+        # agrees on the component counts
+        ncomp = self.comm.mpi_allreduce(np.array(ncomp, dtype="int64"), op="max")
+        return [int(n) for n in ncomp]
 
 
 class YTParticleProj(YTProj):
