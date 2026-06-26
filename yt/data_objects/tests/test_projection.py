@@ -161,6 +161,112 @@ def test_projection(pf):
     teardown_func(fns)
 
 
+def _add_velocity_vector_field(ds):
+    # a vector-valued field: one access returns an (N, 3) array stacking the
+    # three velocity components along a trailing axis
+    def _velocity_vector(field, data):
+        return data.ds.arr(
+            np.stack(
+                [
+                    data["gas", "velocity_x"],
+                    data["gas", "velocity_y"],
+                    data["gas", "velocity_z"],
+                ],
+                axis=-1,
+            ),
+            "cm/s",
+        )
+
+    ds.add_field(
+        ("gas", "velocity_vector"),
+        _velocity_vector,
+        sampling_type="local",
+        units="cm/s",
+    )
+
+
+def test_proj_vector():
+    # projecting a vector-valued field with proj_vector must match stacking the
+    # per-component scalar projections, for both weighted and unweighted, and
+    # for moment=1 and moment=2
+    fields = ("density", "velocity_x", "velocity_y", "velocity_z")
+    units = ("g/cm**3", "cm/s", "cm/s", "cm/s")
+    components = [("gas", "velocity_x"), ("gas", "velocity_y"), ("gas", "velocity_z")]
+    for nprocs in [8, 1]:
+        ds = fake_random_ds(32, fields=fields, units=units, nprocs=nprocs)
+        _add_velocity_vector_field(ds)
+        assert hasattr(ds, "proj_vector")
+        for ax in range(3):
+            for wf in [("gas", "density"), None]:
+                vproj = ds.proj_vector(("gas", "velocity_vector"), ax, weight_field=wf)
+                vv = vproj["gas", "velocity_vector"]
+                assert vv.shape == (vproj["px"].size, 3)
+                sproj = ds.proj(components, ax, weight_field=wf)
+                ref = np.stack([sproj[c] for c in components], axis=-1)
+                assert_equal(vv, ref)
+                assert_equal(vv.units, sproj[components[0]].units)
+        # standard deviation (moment=2) along the components
+        vproj2 = ds.proj_vector(
+            ("gas", "velocity_vector"), 0, weight_field=("gas", "density"), moment=2
+        )
+        for i, c in enumerate(components):
+            sproj2 = ds.proj(c, 0, weight_field=("gas", "density"), moment=2)
+            assert_rel_equal(vproj2["gas", "velocity_vector"][:, i], sproj2[c], 10)
+
+
+def test_proj_vector_sph():
+    # the SPH path projects all components in a single pass through
+    # pixelize_sph_kernel_projection_vector; the resulting (ny, nx, ncomp) image
+    # must match stacking the per-component scalar SPH projections
+    from yt.testing import fake_random_sph_ds
+
+    bbox = np.array([[0.0, 10.0], [0.0, 10.0], [0.0, 10.0]])
+    ds = fake_random_sph_ds(2000, bbox)
+
+    def _make_component(factor):
+        def _component(field, data):
+            return factor * data["gas", "density"]
+
+        return _component
+
+    for i, factor in enumerate((1.0, 2.0, 3.0)):
+        ds.add_field(
+            ("gas", f"c{i}"),
+            _make_component(factor),
+            sampling_type="local",
+            units="g/cm**3",
+        )
+
+    def _vector(field, data):
+        return data.ds.arr(
+            np.stack(
+                [data["gas", "c0"], data["gas", "c1"], data["gas", "c2"]], axis=-1
+            ),
+            "g/cm**3",
+        )
+
+    ds.add_field(("gas", "vector"), _vector, sampling_type="local", units="g/cm**3")
+
+    width = (10.0, "cm")
+    npix = 32
+    for wf in [None, ("gas", "density")]:
+        vproj = ds.proj_vector(("gas", "vector"), "z", weight_field=wf)
+        img = np.asarray(vproj.to_frb(width, npix)["gas", "vector"])
+        assert img.shape == (npix, npix, 3)
+        ref = np.stack(
+            [
+                np.asarray(
+                    ds.proj(("gas", f"c{i}"), "z", weight_field=wf).to_frb(width, npix)[
+                        "gas", f"c{i}"
+                    ]
+                )
+                for i in range(3)
+            ],
+            axis=-1,
+        )
+        np.testing.assert_allclose(img, ref, rtol=1e-12, equal_nan=True)
+
+
 def test_max_level():
     ds = fake_amr_ds(fields=[("gas", "density")], units=["mp/cm**3"])
     proj = ds.proj(("gas", "density"), 2, method="max", max_level=2)
