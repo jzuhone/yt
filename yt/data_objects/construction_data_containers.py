@@ -484,8 +484,23 @@ class YTParticleProj(YTProj):
             moment=moment,
         )
 
-    def _handle_chunk(self, chunk, fields, tree):
+    def _handle_chunk(self, chunk, fields, tree, ncomp):
         raise NotImplementedError("Particle projections have not yet been implemented")
+
+
+class YTParticleProjVector(YTParticleProj):
+    """
+    A projection of one or more *vector-valued* fields for SPH particle data.
+
+    This object is typically accessed through the ``proj_vector`` object that
+    hangs off of an SPH dataset.  Like :class:`YTParticleProj`, the projection
+    itself is carried out by the SPH pixelization when a fixed-resolution buffer
+    is generated; the only difference is that the field smoothed onto the buffer
+    is vector-valued (shape ``(nparticles, ncomponents)``), producing an image
+    of shape ``(ny, nx, ncomponents)`` in a single pass over the particles.
+    """
+
+    _type_name = "particle_proj_vector"
 
 
 class YTQuadTreeProj(YTProj):
@@ -638,7 +653,7 @@ class YTQuadTreeProj(YTProj):
         ilevel = chunk.ires * self.ds.ires_factor
         tree.initialize_chunk(i1, i2, ilevel)
 
-    def _handle_chunk(self, chunk, fields, tree):
+    def _handle_chunk(self, chunk, fields, tree, ncomp):
         mylog.debug(
             "Adding chunk (%s) to tree (%0.3e GB RAM)",
             chunk.ires.size,
@@ -655,10 +670,18 @@ class YTQuadTreeProj(YTProj):
             # at the display layer.
             if not dl.units.is_dimensionless:
                 dl.convert_to_units(self.ds.unit_system["length"])
-        v = np.empty((chunk.ires.size, len(fields)), dtype="float64")
-        for i, field in enumerate(fields):
-            d = chunk[field] * dl
-            v[:, i] = d
+        # vector-valued fields contribute more than one column; lay the
+        # components of each field out contiguously in the value array
+        v = np.empty((chunk.ires.size, int(sum(ncomp))), dtype="float64")
+        off = 0
+        for field, m in zip(fields, ncomp, strict=True):
+            d = chunk[field]
+            if m == 1:
+                v[:, off] = d * dl
+            else:
+                dl_b = dl[:, None] if getattr(dl, "ndim", 0) == 1 else dl
+                v[:, off : off + m] = d * dl_b
+            off += m
         if self.weight_field is not None:
             w = chunk[self.weight_field]
             np.multiply(v, w[:, None], v)
@@ -672,6 +695,31 @@ class YTQuadTreeProj(YTProj):
         i2 = icoords[:, yax]
         ilevel = chunk.ires * self.ds.ires_factor
         tree.add_chunk_to_tree(i1, i2, ilevel, v, w)
+
+
+class YTQuadTreeProjVector(YTQuadTreeProj):
+    """
+    A projection of one or more *vector-valued* fields along an axis.
+
+    This object is typically accessed through the ``proj_vector`` object that
+    hangs off of a grid dataset.  A vector-valued field returns a 2D array of
+    shape ``(ncells, ncomponents)`` per cell; this projects every component in a
+    single pass through the quadtree, reusing the standard projection machinery.
+
+    The result of each projected field has shape ``(npix, ncomponents)``, i.e.
+    the trailing component axis is preserved.  All parameters are identical to
+    :class:`YTQuadTreeProj`.
+
+    Examples
+    --------
+
+    >>> # ("gas", "velocity") returns an (N, 3) array per cell
+    >>> prj = ds.proj_vector(("gas", "velocity"), "z", weight_field=("gas", "density"))
+    >>> prj["gas", "velocity"].shape
+    (npix, 3)
+    """
+
+    _type_name = "quad_proj_vector"
 
 
 class YTCoveringGrid(YTSelectionContainer3D):
