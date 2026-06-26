@@ -14,6 +14,7 @@ from yt.utilities.lib.pixelization_routines import (
     pixelize_off_axis_cartesian,
     pixelize_sph_kernel_cutting,
     pixelize_sph_kernel_projection,
+    pixelize_sph_kernel_projection_vector,
     pixelize_sph_kernel_slice,
 )
 from yt.utilities.math_utils import compute_stddev_image
@@ -316,7 +317,10 @@ class CartesianCoordinateHandler(CoordinateHandler):
     def _ortho_pixelize(
         self, data_source, field, bounds, size, antialias, dim, periodic
     ):
-        from yt.data_objects.construction_data_containers import YTParticleProj
+        from yt.data_objects.construction_data_containers import (
+            YTParticleProj,
+            YTParticleProjVector,
+        )
         from yt.data_objects.selection_objects.slices import YTSlice
         from yt.frontends.sph.data_structures import ParticleDataset
         from yt.frontends.stream.data_structures import StreamParticlesDataset
@@ -425,6 +429,26 @@ class CartesianCoordinateHandler(CoordinateHandler):
                 # need some z bounds for SPH projection
                 # -> use source bounds
                 bnds3 = bnds + [le[za], re[za]]
+
+                if isinstance(data_source, YTParticleProjVector):
+                    buff, mask = self._ortho_pixelize_sph_vector(
+                        data_source,
+                        proj_reg,
+                        field,
+                        ptype,
+                        px_name,
+                        py_name,
+                        pz_name,
+                        weight,
+                        moment,
+                        ounits,
+                        size,
+                        bnds3,
+                        _periodic,
+                        period3,
+                        kernel_name,
+                    )
+                    return buff, mask
 
                 buff = np.zeros(size, dtype="float64")
                 mask_uint8 = np.zeros_like(buff, dtype="uint8")
@@ -665,6 +689,133 @@ class CartesianCoordinateHandler(CoordinateHandler):
                 return_mask=True,
             )
         assert mask is None or mask.dtype == bool
+        return buff, mask
+
+    def _ortho_pixelize_sph_vector(
+        self,
+        data_source,
+        proj_reg,
+        field,
+        ptype,
+        px_name,
+        py_name,
+        pz_name,
+        weight,
+        moment,
+        ounits,
+        size,
+        bnds3,
+        _periodic,
+        period3,
+        kernel_name,
+    ):
+        # Projection of a vector-valued SPH field.  All components are smoothed
+        # onto an (nx, ny, ncomp) buffer in a single pass over the particles via
+        # pixelize_sph_kernel_projection_vector, then weighted/normalized
+        # component-by-component.  Mirrors the scalar SPH projection branch in
+        # _ortho_pixelize (including the final transpose), but keeps the trailing
+        # component axis.
+        check_period = _periodic.astype("int")
+
+        def sph_args(chunk):
+            return (
+                chunk[ptype, px_name].to("code_length"),
+                chunk[ptype, py_name].to("code_length"),
+                chunk[ptype, pz_name].to("code_length"),
+                chunk[ptype, "smoothing_length"].to("code_length"),
+                chunk[ptype, "mass"].to("code_mass"),
+                chunk[ptype, "density"].to("code_density"),
+            )
+
+        # the number of components is read from the first chunk that has data
+        ncomp = 1
+        for chunk in proj_reg.chunks([], "io"):
+            fv = chunk[field]
+            ncomp = 1 if fv.ndim == 1 else fv.shape[1]
+            break
+
+        def vector_quantity(chunk):
+            arr = chunk[field].in_units(ounits)
+            return np.ascontiguousarray(np.asarray(arr).reshape(arr.shape[0], ncomp))
+
+        buff = np.zeros((size[0], size[1], ncomp), dtype="float64")
+        mask_uint8 = np.zeros(size, dtype="uint8")
+
+        if weight is None:
+            for chunk in proj_reg.chunks([], "io"):
+                data_source._initialize_projected_units([field], chunk)
+                pixelize_sph_kernel_projection_vector(
+                    buff,
+                    mask_uint8,
+                    *sph_args(chunk),
+                    vector_quantity(chunk),
+                    bnds3,
+                    _check_period=check_period,
+                    period=period3,
+                    kernel_name=kernel_name,
+                )
+            # convert the code-length path length to the unit system's length
+            default_path_length_unit = data_source.ds.unit_system["length"]
+            dl_conv = data_source.ds.quan(1.0, "code_length").to(
+                default_path_length_unit
+            )
+            buff *= dl_conv.v
+        else:
+            weight_buff = np.zeros(size, dtype="float64")
+            wounits = data_source.ds.field_info[weight].output_units
+            for chunk in proj_reg.chunks([], "io"):
+                data_source._initialize_projected_units([field], chunk)
+                data_source._initialize_projected_units([weight], chunk)
+                pixelize_sph_kernel_projection_vector(
+                    buff,
+                    mask_uint8,
+                    *sph_args(chunk),
+                    vector_quantity(chunk),
+                    bnds3,
+                    _check_period=check_period,
+                    period=period3,
+                    weight_field=chunk[weight].in_units(wounits),
+                    kernel_name=kernel_name,
+                )
+            for chunk in proj_reg.chunks([], "io"):
+                data_source._initialize_projected_units([weight], chunk)
+                pixelize_sph_kernel_projection(
+                    weight_buff,
+                    mask_uint8,
+                    *sph_args(chunk),
+                    chunk[weight].in_units(wounits),
+                    bnds3,
+                    _check_period=check_period,
+                    period=period3,
+                    kernel_name=kernel_name,
+                )
+            for m in range(ncomp):
+                normalization_2d_utility(buff[:, :, m], weight_buff)
+            if moment == 2:
+                buff2 = np.zeros((size[0], size[1], ncomp), dtype="float64")
+                for chunk in proj_reg.chunks([], "io"):
+                    data_source._initialize_projected_units([field], chunk)
+                    data_source._initialize_projected_units([weight], chunk)
+                    pixelize_sph_kernel_projection_vector(
+                        buff2,
+                        mask_uint8,
+                        *sph_args(chunk),
+                        vector_quantity(chunk) ** 2,
+                        bnds3,
+                        _check_period=check_period,
+                        period=period3,
+                        weight_field=chunk[weight].in_units(wounits),
+                        kernel_name=kernel_name,
+                    )
+                for m in range(ncomp):
+                    normalization_2d_utility(buff2[:, :, m], weight_buff)
+                    buff[:, :, m] = compute_stddev_image(buff2[:, :, m], buff[:, :, m])
+
+        mask = mask_uint8.astype("bool")
+        # match the orientation produced by the scalar SPH projection branch,
+        # swapping only the two spatial axes and preserving the component axis
+        buff = buff.swapaxes(0, 1)
+        mask = mask.transpose()
         return buff, mask
 
     def _oblique_pixelize(self, data_source, field, bounds, size, antialias):
