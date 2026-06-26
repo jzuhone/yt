@@ -11,7 +11,12 @@ from yt.utilities.logger import ytLogger as mylog
 class UnstructuredIndex(Index):
     """The Index subclass for unstructured and hexahedral mesh datasets."""
 
-    _unsupported_objects = ("proj", "covering_grid", "smoothed_covering_grid")
+    _unsupported_objects = (
+        "proj",
+        "quad_proj_vector",
+        "covering_grid",
+        "smoothed_covering_grid",
+    )
 
     def __init__(self, ds, dataset_type):
         self.dataset_type = dataset_type
